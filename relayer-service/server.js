@@ -37,7 +37,7 @@ const CONTRACT_ABI = [
 ];
 
 // Default relayer wallet (for messages if config is incorrect)
-const DEFAULT_RELAYER_ADDRESS = '0x26921bDA346AF373d25Ff8beB35F2C5294218528';
+const DEFAULT_RELAYER_ADDRESS = '0xF0B5381A05A8d8368C7D3af031F7B50e979CeA12';
 
 // Get private key from environment variables
 // IMPORTANT: Never hardcode private keys in production code
@@ -90,6 +90,26 @@ const checkRelayerAuthorization = async () => {
     }
   } catch (error) {
     console.error("Failed to check relayer authorization:", error);
+  }
+};
+
+// Add this function after the initialization function
+const checkWalletBalance = async () => {
+  try {
+    const balance = await provider.getBalance(wallet.address);
+    const balanceEth = ethers.utils.formatEther(balance);
+    console.log(`Current relayer wallet balance: ${balanceEth} MATIC`);
+    
+    // Check if balance is too low
+    if (parseFloat(balanceEth) < 0.05) {
+      console.warn(`⚠️ WARNING: Relayer wallet balance is critically low (${balanceEth} MATIC)`);
+      console.warn(`Please add more funds to ${wallet.address}`);
+    }
+    
+    return balance;
+  } catch (error) {
+    console.error("Error checking wallet balance:", error);
+    return ethers.BigNumber.from("0");
   }
 };
 
@@ -266,6 +286,28 @@ app.post('/submit-vote', async (req, res) => {
     // Format merkle proof if provided
     const formattedMerkleProof = merkleProof || [];
     
+    // Check if relayer has enough balance first
+    const balance = await checkWalletBalance();
+    const estimatedGasCost = ethers.utils.parseUnits("80", "gwei").mul(ethers.BigNumber.from("500000"));
+    
+    if (balance.lt(estimatedGasCost)) {
+      console.error(`[${requestId}] Insufficient funds in relayer wallet. Has ${ethers.utils.formatEther(balance)} MATIC, needs approximately ${ethers.utils.formatEther(estimatedGasCost)} MATIC`);
+      return res.status(400).json({
+        success: false,
+        message: "Relayer service wallet needs more funds. Please try again later or contact the administrator."
+      });
+    }
+    
+    // Check if voter is the relayer (don't allow relayer to vote for itself)
+    if (voter.toLowerCase() === wallet.address.toLowerCase()) {
+      clearTimeout(requestTimeout);
+      console.error(`[${requestId}] Voter ${voter} is the relayer wallet. Relayers cannot vote for themselves.`);
+      return res.status(400).json({
+        success: false,
+        message: "The relayer wallet cannot vote. Please use a different wallet."
+      });
+    }
+    
     // Submit the vote via metaVote function
     console.log(`[${requestId}] Submitting vote: Poll ${pollId}, Candidate ${candidateId}, Voter ${voter}`);
     
@@ -288,7 +330,7 @@ app.post('/submit-vote', async (req, res) => {
       // Add more debugging for transaction construction
       console.log(`[${requestId}] Transaction options:`, {
         gasLimit: gasLimit.toString(),
-        maxFeePerGas: ethers.utils.parseUnits("300", "gwei").toString(),
+        maxFeePerGas: ethers.utils.parseUnits("80", "gwei").toString(),
         maxPriorityFeePerGas: ethers.utils.parseUnits("30", "gwei").toString()
       });
       
@@ -301,8 +343,8 @@ app.post('/submit-vote', async (req, res) => {
         signature,
         { 
           gasLimit,
-          maxFeePerGas: ethers.utils.parseUnits("300", "gwei"),     // Much higher gas price for current network conditions
-          maxPriorityFeePerGas: ethers.utils.parseUnits("30", "gwei") // Network minimum is 25 GWEI
+          maxFeePerGas: ethers.utils.parseUnits("80", "gwei"),     // Lower max fee to conserve funds
+          maxPriorityFeePerGas: ethers.utils.parseUnits("30", "gwei") // Keep priority fee high enough
         }
       );
       
@@ -392,11 +434,11 @@ app.post('/submit-vote', async (req, res) => {
               try {
                 console.log(`[${requestId}] Replacing stuck transaction with higher gas price`);
                 
-                // Double the gas price for replacement
+                // Updated replacement gas settings to be more conservative
                 const replacementGasPrice = {
                   gasLimit: ethers.BigNumber.from("600000"),
-                  maxFeePerGas: ethers.utils.parseUnits("500", "gwei"),     // Even higher for replacement
-                  maxPriorityFeePerGas: ethers.utils.parseUnits("50", "gwei") // Well above network minimum
+                  maxFeePerGas: ethers.utils.parseUnits("100", "gwei"),     // Still higher than initial but more conservative
+                  maxPriorityFeePerGas: ethers.utils.parseUnits("35", "gwei") // Slightly higher than minimum
                 };
                 
                 console.log(`[${requestId}] Replacement transaction options:`, {
@@ -537,6 +579,11 @@ app.post('/submit-vote', async (req, res) => {
         return res.status(400).json({
           success: false,
           message: "Insufficient funds from poll creator to cover gas fees"
+        });
+      } else if (error.message.includes("insufficient funds")) {
+        return res.status(400).json({
+          success: false,
+          message: "Relayer wallet needs more funds. Please try again later."
         });
       } else if (error.message.includes("nonce")) {
         return res.status(500).json({

@@ -187,15 +187,15 @@ export const submitMetaTransaction = async (
                 message: "This poll has ended. Voting is no longer possible."
               };
             } else if (result.message?.includes("Maximum voters")) {
-              return {
-                success: false,
+      return {
+        success: false,
                 message: "Maximum number of voters reached for this poll."
-              };
+      };
             }
-          }
-          
-          return {
-            success: false,
+    }
+    
+      return {
+        success: false,
             message: result.message || "Failed to submit vote through relayer service"
           };
         }
@@ -206,17 +206,17 @@ export const submitMetaTransaction = async (
           
           // Still return success if the relayer said it was successful
           if (result.success) {
-            return {
-              success: true,
+      return {
+        success: true,
               message: "Vote submitted via relayer. Waiting for blockchain confirmation...",
-              pollId: pollId,
-              candidateId: candidateId
-            };
+        pollId: pollId,
+        candidateId: candidateId
+      };
           } else {
-            return {
-              success: false,
+        return {
+          success: false,
               message: result.message || "Relayer failed to process the vote"
-            };
+        };
           }
         }
         

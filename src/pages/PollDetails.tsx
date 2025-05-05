@@ -316,7 +316,7 @@ const PollDetails = () => {
       }
       
       // Check if the user is trying to vote with the relayer address
-      const relayerAddress = '0x26921bDA346AF373d25Ff8beB35F2C5294218528';
+      const relayerAddress = '0xF0B5381A05A8d8368C7D3af031F7B50e979CeA12';
       if (address.toLowerCase() === relayerAddress.toLowerCase()) {
         throw new Error("You cannot vote with the relayer wallet address. Please use a different wallet.");
       }
