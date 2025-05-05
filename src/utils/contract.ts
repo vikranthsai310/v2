@@ -1,7 +1,5 @@
 import { ethers } from "ethers";
-
-// Contract Address on Polygon
-export const CONTRACT_ADDRESS = "0x14b1c2df30f31f43126e6bef94009d0b1b9cc51c";
+import { CONTRACT_ADDRESS } from "./config";
 
 // ABI for GasOptimizedVotingSystem
 export const CONTRACT_ABI = [
@@ -27,7 +25,7 @@ export const CONTRACT_ABI = [
   "function defaultRelayerWallet() external view returns (address)",
   "function authorizedRelayers(address) external view returns (bool)",
   "function setRelayerStatus(address _relayer, bool _status) external",
-  "function updateDefaultRelayer(address _newDefaultRelayer) external",
+  "function updateDefaultRelayer(address _newDefault) external",
   "function isAuthorizedRelayer(address _relayer) external view returns (bool)",
   
   // Events

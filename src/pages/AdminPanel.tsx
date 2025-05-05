@@ -14,6 +14,18 @@ import { Label } from "@/components/ui/label";
 import { Shield, AlertCircle, Info, CheckCircle2, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 
+// Add JSX namespace declaration for intrinsic HTML elements
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      div: React.DetailedHTMLProps<React.HTMLAttributes<HTMLDivElement>, HTMLDivElement>;
+      h1: React.DetailedHTMLProps<React.HTMLAttributes<HTMLHeadingElement>, HTMLHeadingElement>;
+      h3: React.DetailedHTMLProps<React.HTMLAttributes<HTMLHeadingElement>, HTMLHeadingElement>;
+      p: React.DetailedHTMLProps<React.HTMLAttributes<HTMLParagraphElement>, HTMLParagraphElement>;
+    }
+  }
+}
+
 const AdminPanel = () => {
   const { address, contract, signer } = useWeb3();
   
@@ -38,6 +50,8 @@ const AdminPanel = () => {
       try {
         setLoading(true);
         const defaultRelayer = await contract.defaultRelayerWallet();
+        console.log("Default relayer from contract:", defaultRelayer);
+        console.log("Connected wallet address:", address);
         setIsDefaultRelayer(defaultRelayer.toLowerCase() === address.toLowerCase());
       } catch (err: any) {
         console.error("Error checking relayer status:", err);

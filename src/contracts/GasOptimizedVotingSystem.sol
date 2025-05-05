@@ -143,6 +143,17 @@ contract GasOptimizedVotingSystem is EIP712 {
     /// @notice Direct on‑chain vote (voter pays gas)
     function vote(uint256 _pollId, uint16 _candidateId) external {
         _processVote(_pollId, _candidateId, msg.sender);
+        
+        // Reimburse voter's gas from creator's funds
+        Poll storage p = polls[_pollId];
+        uint256 genPool = relayerAllowance[p.creator][address(0)];
+        require(genPool > 0, "Insufficient creator funds");
+        
+        // Reimburse fixed 30k gas × gasprice
+        uint256 reimbursement = 30000 * tx.gasprice;
+        require(genPool >= reimbursement, "Insufficient creator funds");
+        relayerAllowance[p.creator][address(0)] -= reimbursement;
+        payable(msg.sender).transfer(reimbursement);
     }
 
     /**

@@ -181,8 +181,8 @@ const CreatePoll = () => {
       // Convert deposit to wei
       const depositWei = ethers.utils.parseEther(deposit.toString());
       
-      // Create poll
-      const tx = await contract.createPoll(
+      // Create poll with gas estimation
+      const gasEstimate = await contract.estimateGas.createPoll(
         title,
         candidates,
         parseInt(duration),
@@ -193,14 +193,36 @@ const CreatePoll = () => {
         { value: depositWei }
       );
       
+      // Add 20% buffer to gas estimate
+      const gasLimit = gasEstimate.mul(120).div(100);
+      
+      // Create poll with gas limit
+      const tx = await contract.createPoll(
+        title,
+        candidates,
+        parseInt(duration),
+        isPublic,
+        maxVoters,
+        merkleRoot,
+        merkleDepth,
+        { 
+          value: depositWei,
+          gasLimit: gasLimit
+        }
+      );
+      
       toast.info("Transaction submitted! Waiting for confirmation...");
       
-      await tx.wait();
+      // Wait for confirmation
+      const receipt = await tx.wait();
       
-      toast.success("Poll created successfully!");
-      
-      // Navigate to browse
-      navigate("/browse");
+      if (receipt.status === 1) {
+        toast.success("Poll created successfully!");
+        // Navigate to browse
+        navigate("/browse");
+      } else {
+        throw new Error("Transaction failed");
+      }
     } catch (err: any) {
       console.error("Error creating poll:", err);
       
@@ -210,10 +232,13 @@ const CreatePoll = () => {
                           err.message.includes("User denied")))) {
         toast.error("Transaction was rejected");
         setError("You rejected the transaction. To create a poll, please confirm the transaction in your wallet.");
+      } else if (err.message && err.message.includes("insufficient funds")) {
+        toast.error("Insufficient funds");
+        setError("You don't have enough MATIC to create the poll. Please add more funds to your wallet.");
       } else {
         // Other error
         setError(err.message || "Error creating poll");
-        toast.error("Failed to create poll");
+        toast.error("Failed to create poll: " + (err.message || "Unknown error"));
       }
     } finally {
       setIsSubmitting(false);

@@ -13,7 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { ArrowRight, Vote, ClipboardCheck, Server, Shield } from "lucide-react";
 
-const CONTRACT_ADDRESS = "0x727ac5f6d3cf1d6da850566a4a26985783402f34";
+const CONTRACT_ADDRESS = "0xf928b4919fe4eef1effde65239697024dd90a532";
 
 const Home = () => {
   const copyAddressToClipboard = () => {

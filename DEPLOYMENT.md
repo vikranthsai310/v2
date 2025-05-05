@@ -3,7 +3,7 @@
 ## Contract Details
 
 - **Contract Name**: GasOptimizedVotingSystem
-- **Deployed Address**: `0x727ac5f6d3cf1d6da850566a4a26985783402f34`
+- **Deployed Address**: `0xf928b4919fe4eef1effde65239697024dd90a532`
 - **Network**: Polygon Mainnet
 - **Solidity Version**: 0.8.18
 

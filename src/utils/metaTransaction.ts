@@ -1,5 +1,5 @@
 import { ethers } from "ethers";
-import { CONTRACT_ADDRESS } from "./contract";
+import { CONTRACT_ADDRESS, RELAYER_SERVICE_URL, debugLog } from "./config";
 import { toast } from "sonner";
 
 // Interface for Relayer Service
@@ -67,6 +67,26 @@ export const EIP712_VOTE_TYPE = {
   ]
 };
 
+// Relayer service endpoint is now imported from config.ts
+
+// Add a function to check if the relayer service is available
+export const checkRelayerServiceStatus = async (): Promise<boolean> => {
+  try {
+    const response = await fetch(`${RELAYER_SERVICE_URL}/status`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    if (!response.ok) return false;
+    
+    const result = await response.json();
+    return result.success === true;
+  } catch (error) {
+    console.error("Error checking relayer service:", error);
+    return false;
+  }
+};
+
 // Function to submit a meta-transaction to a relayer service
 export const submitMetaTransaction = async (
   pollId: number,
@@ -75,125 +95,177 @@ export const submitMetaTransaction = async (
   signature: string,
   merkleProof: string[] = []
 ): Promise<RelayerResponse> => {
-  // In a real application, this would call an actual relayer service API
-  // Here we're implementing it directly in the frontend for development purposes
-  
-  console.log("Submitting meta transaction:", {
+  debugLog("Submitting meta transaction:", {
     pollId,
     candidateId,
     voter,
-    signature,
-    merkleProof
-  });
+    signature: signature.substring(0, 20) + "...", // Truncate for logging
+    merkleProof: merkleProof.length > 0 ? "Provided" : "None"
+  }, "info");
   
   try {
-    // Get the contract instance to interact with the blockchain
-    const provider = new ethers.providers.Web3Provider(window.ethereum);
-    const signer = provider.getSigner();
-    
-    // Get contract with full ABI for read/write operations
-    const contract = new ethers.Contract(
-      CONTRACT_ADDRESS, 
-      [
-        "function getPollDetails(uint256 _pollId) external view returns (string memory title, address creator, uint64 endTime, uint16 candidateCount, bool isPublic, uint64 voterCount, uint64 maxVoters)",
-        "function metaVote(uint256 _pollId, uint16 _candidateId, address _voter, bytes32[] calldata _merkleProof, bytes calldata _signature) external",
-        "function vote(uint256 _pollId, uint16 _candidateId) external", // Added direct vote function
-        "function isAuthorizedRelayer(address _relayer) external view returns (bool)",
-        "function hasVoted(uint256 _pollId, address _voter) external view returns (bool)",
-        "function relayerAllowance(address, address) external view returns (uint256)"
-      ], 
-      signer
-    );
-    
-    // First check if user has already voted
-    const hasVoted = await contract.hasVoted(pollId, voter);
-    if (hasVoted) {
+    // Check if relayer service is available first
+    const isRelayerAvailable = await checkRelayerServiceStatus();
+    if (!isRelayerAvailable) {
+      debugLog("Relayer service unavailable during pre-check", null, "error");
       return {
         success: false,
-        message: "You have already voted in this poll on the blockchain."
+        message: "Relayer service appears to be offline. Please try again later."
       };
     }
     
-    // Get poll creator address and details
-    const [title, creator, endTime, candidateCount, isPublic, voterCount, maxVoters] = await contract.getPollDetails(pollId);
-    console.log("Poll creator:", creator);
+    // Send the signed vote to the relayer service
+    toast.info("Sending signed vote to relayer service...");
+    debugLog("Using relayer URL:", RELAYER_SERVICE_URL, "info");
     
-    // Get current user address (for development only - in production this would be the relayer)
-    const userAddress = await signer.getAddress();
-    console.log("User address:", userAddress);
+    // Debug log the exact payload being sent
+    const payload = {
+      pollId: pollId.toString(),
+      candidateId: candidateId.toString(),
+      voter,
+      signature,
+      merkleProof: merkleProof || []
+    };
     
-    // Check creator funds on the blockchain
-    const creatorFunds = await contract.relayerAllowance(creator, ethers.constants.AddressZero);
-    const creatorFundsEth = parseFloat(ethers.utils.formatEther(creatorFunds));
-    console.log(`Creator blockchain funds: ${creatorFundsEth} MATIC`);
+    debugLog("Payload being sent to relayer:", payload, "info");
     
-    // Check user's wallet balance for direct voting
-    const userBalance = await provider.getBalance(userAddress);
-    const userBalanceEth = parseFloat(ethers.utils.formatEther(userBalance));
-    console.log(`User wallet balance: ${userBalanceEth} MATIC`);
+    // Set up fetch with improved timeout
+    const timeoutDuration = 45000; // 45 seconds timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      debugLog("Request timeout reached, aborting", null, "warn");
+      controller.abort();
+    }, timeoutDuration);
     
-    // Estimate gas fee (in a real system, this would be calculated more accurately)
-    const estimatedGasFee = 0.001; // Simplified for demo
+    // Add retry capability
+    let retryCount = 0;
+    const maxRetries = 2;
     
-    if (creatorFundsEth < estimatedGasFee) {
-      return {
-        success: false,
-        message: "Insufficient creator funds on the blockchain. The creator needs to deposit more MATIC."
-      };
-    }
-    
-    // For direct voting, check if user has enough funds
-    if (userBalanceEth < estimatedGasFee) {
-      return {
-        success: false,
-        message: "Your wallet doesn't have enough MATIC to cover gas fees. Please add funds to your wallet."
-      };
-    }
-    
-    toast.info("Submitting vote to blockchain...");
+    const makeRequest = async () => {
+      try {
+        // Call the relayer service API with timeout
+        debugLog(`Submitting vote request (attempt ${retryCount + 1})`, null, "info");
+        const response = await fetch(`${RELAYER_SERVICE_URL}/submit-vote`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+          mode: 'cors',
+          cache: 'no-cache'
+        });
+        
+        // Parse the response
+        const result = await response.json();
+        
+        // Check if the request was successful
+        if (!response.ok) {
+          debugLog("Relayer service error:", result, "error");
+          
+          // Handle specific error codes
+          if (response.status === 400) {
+            if (result.message?.includes("already voted")) {
+              return {
+                success: false,
+                message: "You have already voted in this poll."
+              };
+            } else if (result.message?.includes("Insufficient") || result.message?.includes("funds")) {
+              return {
+                success: false,
+                message: "Poll creator doesn't have enough funds to cover gas fees for voting."
+              };
+            } else if (result.message?.includes("Invalid")) {
+              return {
+                success: false,
+                message: "Invalid vote signature. Please try again."
+              };
+            } else if (result.message?.includes("ended")) {
+              return {
+                success: false,
+                message: "This poll has ended. Voting is no longer possible."
+              };
+            } else if (result.message?.includes("Maximum voters")) {
+              return {
+                success: false,
+                message: "Maximum number of voters reached for this poll."
+              };
+            }
+          }
+          
+          return {
+            success: false,
+            message: result.message || "Failed to submit vote through relayer service"
+          };
+        }
+        
+        // Check for transaction hash in the response
+        if (!result.txHash) {
+          debugLog("Relayer response missing transaction hash:", result, "warn");
+          
+          // Still return success if the relayer said it was successful
+          if (result.success) {
+            return {
+              success: true,
+              message: "Vote submitted via relayer. Waiting for blockchain confirmation...",
+              pollId: pollId,
+              candidateId: candidateId
+            };
+          } else {
+            return {
+              success: false,
+              message: result.message || "Relayer failed to process the vote"
+            };
+          }
+        }
+        
+        // Return the result from the relayer
+        return {
+          success: true,
+          message: "Vote submitted via relayer and recorded on the blockchain!",
+          txHash: result.txHash,
+          pollId: pollId,
+          candidateId: candidateId
+        };
+      } catch (error: any) {
+        // If we have retries left and it's a fetch/network error (not an abort), retry
+        if (retryCount < maxRetries && error.name !== "AbortError") {
+          retryCount++;
+          debugLog(`Retrying request (${retryCount}/${maxRetries})`, null, "warn");
+          // Exponential backoff - 2, 4 seconds
+          await new Promise(resolve => setTimeout(resolve, retryCount * 2000));
+          return makeRequest();
+        }
+        throw error;
+      }
+    };
     
     try {
-      // In development mode, we'll use the direct vote function to bypass relayer checks
-      // This simulates what would happen in production with a proper relayer
-      console.log("Using direct vote for development mode to bypass relayer authorization");
+      // Make the request with retry capability
+      const result = await makeRequest();
       
-      // Call the regular vote function instead of metaVote to bypass relayer authorization
-      const tx = await contract.vote(pollId, candidateId);
+      // Clear the timeout as we got a response
+      clearTimeout(timeoutId);
       
-      toast.info("Vote transaction submitted! Waiting for confirmation...");
+      return result;
+    } catch (error: any) {
+      // Clear the timeout to free resources
+      clearTimeout(timeoutId);
       
-      // Wait for transaction to be mined
-      const receipt = await tx.wait();
-      console.log("Transaction confirmed:", receipt);
-      
-      return {
-        success: true,
-        message: "Vote submitted successfully and recorded on the blockchain!",
-        txHash: receipt.transactionHash,
-        pollId: pollId,
-        candidateId: candidateId
-      };
-    } catch (directVoteError: any) {
-      console.error("Direct vote error:", directVoteError);
-      
-      // If direct vote fails for some reason, return the error
-      const errorMessage = directVoteError.message || "Unknown error";
-      
-      if (errorMessage.includes("Insufficient funds")) {
-        return {
-          success: false,
-          message: "You don't have enough MATIC in your wallet to cover the gas fee. Please add funds to your wallet."
-        };
-      } else {
-        return {
-          success: false,
-          message: `Failed to submit vote: ${directVoteError.message || "Unknown error"}`
-        };
-      }
+      // Re-throw the error for the outer catch
+      throw error;
     }
-    
   } catch (error: any) {
     console.error("Error in meta transaction:", error);
+    
+    // Check for abort error (timeout)
+    if (error.name === "AbortError") {
+      return {
+        success: false,
+        message: "Request to relayer service timed out. The network might be congested. Your vote might still be processed, please check back later."
+      };
+    }
     
     // Parse error message to provide user-friendly feedback
     const errorMessage = error.message || "Unknown error";
@@ -203,20 +275,25 @@ export const submitMetaTransaction = async (
         success: false,
         message: "You have already voted in this poll on the blockchain."
       };
-    } else if (errorMessage.includes("Insufficient relayer funds")) {
+    } else if (errorMessage.includes("Insufficient") || errorMessage.includes("funds")) {
       return {
         success: false,
         message: "Insufficient funds from poll creator on the blockchain to cover gas costs."
       };
-    } else if (errorMessage.includes("user rejected")) {
+    } else if (errorMessage.includes("user rejected") || errorMessage.includes("User denied")) {
       return {
         success: false,
         message: "Transaction rejected by user. Please try again."
       };
+    } else if (errorMessage.includes("Network request failed") || errorMessage.includes("Failed to fetch")) {
+      return {
+        success: false,
+        message: "Failed to connect to relayer service. Please check your internet connection and try again later."
+      };
     } else {
       return {
         success: false,
-        message: `Blockchain error: ${errorMessage.slice(0, 100)}...`
+        message: `Error: ${errorMessage.slice(0, 100)}${errorMessage.length > 100 ? '...' : ''}`
       };
     }
   }
@@ -316,4 +393,39 @@ export const parseAddressCSV = (csv: string): string[] => {
     .split(/[\n,]/)
     .map(addr => addr.trim())
     .filter(addr => ethers.utils.isAddress(addr));
+};
+
+// Helper function to check if an address is an authorized relayer
+export const checkRelayerAuthorization = async (): Promise<boolean> => {
+  try {
+    const provider = new ethers.providers.Web3Provider(window.ethereum);
+    const signer = provider.getSigner();
+    const userAddress = await signer.getAddress();
+    
+    // Get contract with ABI for checking relayer status
+    const contract = new ethers.Contract(
+      CONTRACT_ADDRESS, 
+      [
+        "function isAuthorizedRelayer(address _relayer) external view returns (bool)",
+        "function defaultRelayerWallet() external view returns (address)"
+      ], 
+      provider
+    );
+    
+    // Check if the current address is authorized
+    const isAuthorized = await contract.isAuthorizedRelayer(userAddress);
+    const defaultRelayer = await contract.defaultRelayerWallet();
+    
+    console.log("Relayer authorization check:", {
+      address: userAddress,
+      isAuthorized,
+      defaultRelayer,
+      isDefaultRelayer: defaultRelayer.toLowerCase() === userAddress.toLowerCase()
+    });
+    
+    return isAuthorized;
+  } catch (error) {
+    console.error("Error checking relayer authorization:", error);
+    return false;
+  }
 };
